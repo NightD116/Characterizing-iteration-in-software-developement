@@ -35,9 +35,9 @@ def get_data(owner, repo):
     # GitHub API endpoints
     base_url = f"https://api.github.com/repos/{owner}/{repo}"
     issues_url = f"{base_url}/issues?per_page={per_page}"
-    events_url = f"{base_url}/issues?per_page={per_page}"
-    releases_url = f"{base_url}/issues?per_page={per_page}"
-    milestones_url = f"{base_url}/issues?per_page={per_page}"
+    events_url = f"{base_url}/events?per_page={per_page}"
+    releases_url = f"{base_url}/releases?per_page={per_page}"
+    milestones_url = f"{base_url}/milestones?per_page={per_page}"
     # Define the params and headers just care closed issues
     issues_milestone_params = {
         "state": "closed"
@@ -45,7 +45,7 @@ def get_data(owner, repo):
     headers = {'User-Agent': 'request'}
     # fetch data and use dataframe to store relevant data
     issues_data = fetch_all_pages(url=issues_url, params=issues_milestone_params, headers=headers)
-    issues_df = pd.DataFrame.from_records(issues_data, columns=["created_at","html_url", "name", "body", "published_at"])
+    issues_df = pd.DataFrame.from_records(issues_data, columns=["created_at","html_url", "title", "body", "closed_at", "number", "pull_request", "milestone", "assignee", "assignees"])
     events_data = fetch_all_pages(url=events_url, headers=headers)
     events_df = pd.DataFrame.from_records(events_data, columns=["type", "payload"])
     releases_data = fetch_all_pages(url=releases_url, headers=headers)
@@ -77,7 +77,7 @@ def detect_iterations(issues_df, events_df, releases_df, milestones_df):
         start_at = milestone.created_at
         end_at = milestone.closed_at
         duration = pd.Timestamp(end_at) - pd.Timestamp(start_at)
-        iterations_df.loc[len(iterations_df.index)] = [type, related_url, isplanned, "New Version publication", body, start_at, end_at, duration]
+        iterations_df.loc[len(iterations_df.index)] = [type, milestone_url, isplanned, "New Version publication", body, start_at, end_at, duration]
 
     # Take list of reviewed pull request
     pull_request_review_events = events_df[events_df.type == "PullRequestReviewEvent"]
@@ -153,22 +153,24 @@ def preprocess_data(text):
     return text
 
 def main():
-    owner = "stanfordnlp"
-    repo = "stanza"
+    owner = "ossu"
+    repo = "computer-science"
     issues_df, events_df, releases_df, milestones_df = get_data(owner=owner, repo=repo)
-
-    print("Get data Done!")
+    events_df.to_csv(f"{owner}_{repo}_events_data.csv")
+    issues_df.to_csv(f"{owner}_{repo}_issues_data.csv")
+    releases_df.to_csv(f"{owner}_{repo}_releases_data.csv")
+    milestones_df.to_csv(f"{owner}_{repo}_milestones_data.csv")
     
     iteration_df = detect_iterations(issues_df, events_df, releases_df, milestones_df)
-    print("Detect Iteration Done!")
     
     models = joblib.load("trained_Random Forest_model.pkl")
     unknown_iterations = iteration_df[iteration_df["Cause"] == "Unknown"]
     
-    X_pred = unknown_iterations["body"].astype(str).apply(preprocess_data)
-    y_pred = models.predict(X_pred)
-    
-    iteration_df[iteration_df["Cause"] == "Unknown"]["Cause"] = y_pred
+    X_pred = unknown_iterations["Body"].astype(str).apply(preprocess_data)
+    tfidf_vectorizer = TfidfVectorizer(max_features=1000)
+    X_pred_tf_idf = tfidf_vectorizer.fit_transform(X_pred)
+    y_pred = models.predict(X_pred_tf_idf)
+    iteration_df.loc[iteration_df["Cause"] == "Unknown", "Cause"] = y_pred
     iteration_df.to_csv(f"{owner}_{repo}_iterations_detected_data.csv")
 
 if __name__ == "__main__":
